@@ -23,8 +23,9 @@ c_warn() { printf '\033[33m!\033[0m %s\n' "$1"; }
 
 uninstall() {
     rm -f "$LAUNCHER"
+    rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/$APP_NAME.desktop"
     rm -rf "$DATA_DIR"
-    c_ok "Removed $LAUNCHER and $DATA_DIR"
+    c_ok "Removed $LAUNCHER, desktop entry, and $DATA_DIR"
     exit 0
 }
 
@@ -54,7 +55,21 @@ exec "$DATA_DIR/venv/bin/python" "$DATA_DIR/$ENTRY" "\$@"
 EOF
 chmod +x "$LAUNCHER"
 
-c_ok "Installed. Run it with:  $APP_NAME"
+c_info "Installing desktop entry"
+APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+mkdir -p "$APP_DIR"
+if command -v omarchy-launch-tui >/dev/null; then
+    # On Omarchy, open in the styled default terminal with a clean app-id.
+    sed -e 's|^Exec=.*|Exec=omarchy-launch-tui networkd-tui|' \
+        -e 's|^Terminal=.*|Terminal=false|' \
+        "$SRC_DIR/$APP_NAME.desktop" > "$APP_DIR/$APP_NAME.desktop"
+else
+    install -m 644 "$SRC_DIR/$APP_NAME.desktop" "$APP_DIR/$APP_NAME.desktop"
+fi
+command -v update-desktop-database >/dev/null && \
+    update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true
+
+c_ok "Installed. Run it with:  $APP_NAME  (or the app launcher)"
 
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;

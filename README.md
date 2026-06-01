@@ -9,6 +9,8 @@ Read-only views need no privileges. Edits, reload, reconfigure and restart use
 `sudo` (passwordless sudo recommended, otherwise run from a terminal where you
 can authenticate).
 
+![networkd-tui screenshot](docs/screenshot.svg)
+
 ## Features
 
 - Live list of managed links with color-coded operational/setup state.
@@ -38,11 +40,19 @@ can authenticate).
 ./install.sh
 ```
 
-Creates a venv at `~/.local/share/networkd-tui`, installs Textual, and drops a
-launcher at `~/.local/bin/networkd-tui`. Then just run:
+Creates a venv at `~/.local/share/networkd-tui`, installs Textual, drops a
+launcher at `~/.local/bin/networkd-tui`, and installs a desktop entry (on
+Omarchy it launches via `omarchy-launch-tui`; elsewhere it opens in a
+terminal). Then just run:
 
 ```bash
 networkd-tui
 ```
 
+…or launch "Networkd TUI" from your app launcher.
+
 Uninstall with `./install.sh --uninstall`.
+
+## License
+
+[MIT](LICENSE) © Alberto Linard

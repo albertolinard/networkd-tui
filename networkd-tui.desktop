@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Name=Networkd TUI
+GenericName=Network Configuration
+Comment=TUI for systemd-networkd (networkctl/resolvectl)
+Exec=networkd-tui
+Icon=network-wired
+Terminal=true
+Type=Application
+Categories=Network;
+Keywords=network;networkd;systemd;networkctl;wifi;ethernet;dns;
