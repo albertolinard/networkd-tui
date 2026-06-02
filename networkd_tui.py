@@ -7,8 +7,8 @@ in /etc/systemd/network/, reload/reconfigure, and check DNS — all built on
 networkctl/resolvectl. Read-only views need no privileges; edits and
 reload/reconfigure/restart use sudo.
 
-Keys: q quit · g refresh · enter full status · R reconfigure · r reload
-      ctrl+r restart · c configs · d DNS
+Keys: q quit · g refresh · enter edit (DHCP/IP/DNS) · i inspect
+      R reconfigure · r reload · ctrl+r restart · c configs · d DNS
 """
 
 import os
@@ -72,6 +72,90 @@ def config_files():
         return []
     return sorted(p.name for p in NETDIR.iterdir()
                   if p.suffix in (".network", ".netdev", ".link"))
+
+
+def link_network_file(name):
+    """Path to the .network file applied to a link, or None if unmanaged."""
+    rc, out = run(["networkctl", "status", "--no-pager", name])
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("Network File:"):
+            val = s.split(":", 1)[1].strip()
+            return None if val in ("n/a", "", "(unknown)") else val
+    return None
+
+
+def current_settings(text):
+    """Parse DHCP / Address / Gateway / DNS out of a .network's [Network]."""
+    s = {"dhcp": False, "address": "", "gateway": "", "dns": []}
+    in_net = False
+    for line in text.splitlines():
+        t = line.strip()
+        if t.startswith("[") and t.endswith("]"):
+            in_net = t.lower() == "[network]"
+            continue
+        if not in_net or not t or t.startswith("#") or "=" not in t:
+            continue
+        k, v = (x.strip() for x in t.split("=", 1))
+        kl = k.lower()
+        if kl == "dhcp":
+            s["dhcp"] = v.lower() in ("yes", "true", "ipv4", "ipv6")
+        elif kl == "address" and not s["address"]:
+            s["address"] = v
+        elif kl == "gateway":
+            s["gateway"] = v
+        elif kl == "dns":
+            s["dns"].extend(v.split())
+    return s
+
+
+def rebuild_network(text, dhcp, address, gateway, dns):
+    """Return `text` with DHCP/Address/Gateway/DNS in [Network] replaced by the
+    given values, preserving every other section and directive."""
+    managed = ("dhcp", "address", "gateway", "dns")
+    new_keys = []
+    if dhcp:
+        new_keys.append("DHCP=yes")
+    else:
+        if address:
+            new_keys.append(f"Address={address}")
+        if gateway:
+            new_keys.append(f"Gateway={gateway}")
+    if dns:
+        new_keys.append("DNS=" + " ".join(dns))
+
+    out, name, buf, have_net = [], None, [], False
+
+    def flush():
+        nonlocal have_net
+        if name is None:
+            out.extend(buf)
+            return
+        out.append(f"[{name}]")
+        if name.lower() == "network":
+            have_net = True
+            for ln in buf:
+                t = ln.strip()
+                if "=" in t and not t.startswith("#") \
+                        and t.split("=", 1)[0].strip().lower() in managed:
+                    continue
+                out.append(ln)
+            out.extend(new_keys)
+        else:
+            out.extend(buf)
+
+    for line in text.splitlines():
+        t = line.strip()
+        if t.startswith("[") and t.endswith("]"):
+            flush()
+            name, buf = t[1:-1], []
+        else:
+            buf.append(line)
+    flush()
+
+    if not have_net:
+        out += ["", "[Network]", *new_keys]
+    return "\n".join(out).rstrip("\n") + "\n"
 
 
 # ──────────────────────────────── modals ────────────────────────────────────
@@ -158,6 +242,101 @@ class NewFileModal(ModalScreen):
             self.app.notify(f"Write failed: {out.strip()}", severity="error")
 
 
+class SettingsModal(ModalScreen):
+    """Guided per-link editor: DHCP/static toggle, address, gateway, DNS."""
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("ctrl+s", "save", "Save"),
+    ]
+
+    def __init__(self, link):
+        super().__init__()
+        self.link = link
+        self.path = link_network_file(link)
+        self.text = ""
+        if self.path:
+            try:
+                self.text = Path(self.path).read_text()
+            except OSError:
+                self.text = ""
+        self.cur = current_settings(self.text)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="settings-form"):
+            yield Static(f"Network settings · {self.link}",
+                         classes="modal-title")
+            src = self.path or "(no file yet — one will be created)"
+            yield Static(src, classes="hint")
+            yield Label("Addressing:", classes="lbl")
+            yield Select([("DHCP (automatic)", "dhcp"),
+                          ("Static (manual)", "static")],
+                         value=("dhcp" if self.cur["dhcp"] else "static"),
+                         allow_blank=False, id="mode")
+            yield Label("IP address / CIDR (static only):", classes="lbl")
+            yield Input(value=self.cur["address"], id="addr",
+                        placeholder="192.168.1.50/24")
+            yield Label("Gateway (static only):", classes="lbl")
+            yield Input(value=self.cur["gateway"], id="gw",
+                        placeholder="192.168.1.1")
+            yield Label("DNS servers (space/comma separated):", classes="lbl")
+            yield Input(value=" ".join(self.cur["dns"]), id="dns",
+                        placeholder="1.1.1.1 9.9.9.9")
+            yield Static("Ctrl+S save · Esc cancel", classes="hint")
+
+    def on_mount(self) -> None:
+        self._sync_enabled(self.query_one("#mode", Select).value)
+
+    def on_select_changed(self, event) -> None:
+        self._sync_enabled(event.value)
+
+    def _sync_enabled(self, mode) -> None:
+        static = mode == "static"
+        for wid in ("addr", "gw"):
+            self.query_one(f"#{wid}", Input).disabled = not static
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+
+    def on_input_submitted(self, _event) -> None:
+        self.action_save()
+
+    def action_save(self) -> None:
+        mode = self.query_one("#mode", Select).value
+        dhcp = mode == "dhcp"
+        addr = self.query_one("#addr", Input).value.strip()
+        gw = self.query_one("#gw", Input).value.strip()
+        dns = [d for d in self.query_one("#dns", Input).value
+               .replace(",", " ").split() if d]
+        if not dhcp and not addr:
+            self.app.notify("Static mode needs an IP address/CIDR",
+                            severity="warning")
+            return
+
+        base = self.text
+        path = self.path
+        if not path:
+            path = str(NETDIR / f"30-{self.link}.network")
+            base = f"[Match]\nName={self.link}\n"
+        content = rebuild_network(base, dhcp, addr, gw, dns)
+
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
+            tmp.write(content)
+            tmppath = tmp.name
+        rc, out = run(["sudo", "install", "-m", "0644", tmppath, path])
+        os.unlink(tmppath)
+        if rc != 0:
+            self.app.notify(f"Write failed: {out.strip()}", severity="error")
+            return
+        run(["sudo", "networkctl", "reload"])
+        run(["sudo", "networkctl", "reconfigure", self.link])
+        self.app.notify(f"Applied to {self.link} "
+                        f"({'DHCP' if dhcp else 'static'})")
+        self.app.pop_screen()
+        self.app.refresh_links()
+
+
 class ConfigsScreen(ModalScreen):
     """Browse files in /etc/systemd/network with a live preview; edit/new."""
 
@@ -237,8 +416,9 @@ class NetworkdTUI(App):
     .lbl { color: $text-muted; padding: 1 1 0 1; }
     .hint { color: $text-muted; text-style: italic; padding: 0 1; }
     .modal-title { text-style: bold; color: $accent; padding: 1 1 0 2; }
-    #new-form { width: 60; height: auto; border: round $accent;
+    #new-form, #settings-form { width: 64; height: auto; border: round $accent;
                 background: $surface; padding: 1 2; margin: 2 4; }
+    Input:disabled { opacity: 0.5; }
     #cfg-body { height: 1fr; }
     #cfg-list { width: 34%; border-right: solid $panel; }
     #cfg-preview-box { width: 1fr; padding: 0 1; }
@@ -249,7 +429,8 @@ class NetworkdTUI(App):
         ("q", "quit", "Quit"),
         ("escape", "quit", "Quit"),
         ("g", "refresh", "Refresh"),
-        ("enter", "status", "Status"),
+        ("enter", "settings", "Edit (DHCP/IP/DNS)"),
+        ("i", "status", "Inspect"),
         ("R", "reconfigure", "Reconfigure"),
         ("r", "reload", "Reload"),
         ("ctrl+r", "restart", "Restart svc"),
@@ -316,12 +497,22 @@ class NetworkdTUI(App):
         if event.row_key and event.row_key.value:
             self._render_detail(event.row_key.value)
 
+    def on_data_table_row_selected(self, event) -> None:
+        # Enter on the links table opens the guided editor.
+        if event.row_key and event.row_key.value:
+            self.push_screen(SettingsModal(event.row_key.value))
+
     # ── actions ──────────────────────────────────────────────────────────
 
     def action_refresh(self) -> None:
         self.refresh_links()
         self.update_title()
         self.notify("Refreshed")
+
+    def action_settings(self) -> None:
+        name = self._current_name()
+        if name:
+            self.push_screen(SettingsModal(name))
 
     def action_status(self) -> None:
         name = self._current_name()

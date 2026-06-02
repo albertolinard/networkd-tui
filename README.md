@@ -15,8 +15,12 @@ can authenticate).
 
 - Live list of managed links with color-coded operational/setup state.
 - Per-link status detail (updates as you move the cursor).
-- Browse and **edit** `/etc/systemd/network/*.network|.netdev|.link` via
-  `networkctl edit` (validates and offers to reload).
+- **Guided editor** (press Enter on a link): flip **DHCP ↔ Static**, set the
+  **IP address/gateway**, and set **DNS** servers from a form — no INI editing.
+  Reads the link's current config, writes it back preserving other directives,
+  then reloads and reconfigures.
+- Browse and **edit** raw `/etc/systemd/network/*.network|.netdev|.link` via
+  `networkctl edit` (validates and offers to reload) for advanced changes.
 - Scaffold a **new `.network`** file (DHCP or static) from a small form.
 - **Reconfigure** a link, **reload** networkd, or **restart** the service.
 - **DNS** view (`resolvectl status`).
@@ -27,12 +31,15 @@ can authenticate).
 |-----|--------|
 | `q` / `Esc` | Quit |
 | `g` | Refresh |
-| `Enter` | Full status of selected link |
+| `Enter` | **Edit** selected link — DHCP/Static, IP, gateway, DNS |
+| `i` | Inspect (full status of selected link) |
 | `R` | Reconfigure selected link |
 | `r` | Reload networkd |
 | `Ctrl+R` | Restart `systemd-networkd` |
-| `c` | Config files browser (edit / new) |
+| `c` | Config files browser (raw edit / new) |
 | `d` | DNS status (resolved) |
+
+Inside the edit form: `Ctrl+S` save · `Esc` cancel.
 
 ## Install
 
